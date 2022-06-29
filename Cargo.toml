@@ -1,0 +1,55 @@
+[package]
+name = "img2ctext"
+version = "0.1.0"
+edition = "2021"
+license = "MIT/Apache-2.0"
+readme = "README.md"
+description = "Color image-to-text converter"
+categories = ["command-line-utilities", "graphics"]
+repository = "https://github.com/yvt/img2ctext"
+rust-version = "1.61.0"
+
+[features]
+# Enable the `bin`-only deps to make `cargo install` easy at cost of
+# making it more tedious to use the package as a library. The following are the
+# RFCs that will solve this problem:
+#
+#  - [Allow specifying dependencies for individual artifacts]
+#    (https://github.com/rust-lang/rfcs/pull/2887)
+#  - [Allow specifying features of the implicit lib dependency]
+#    (https://github.com/rust-lang/rfcs/pull/3020)
+#
+default = ["bin"]
+
+# `bin`-only deps
+bin = [
+    "env_logger",
+    "fn-formats",
+    "console",
+    "anyhow",
+    "image",
+    "clap",
+    "log",
+]
+
+[dependencies]
+env_logger = { version = "0.9.0", optional = true }
+fn-formats = { version = "0.0.5", optional = true }
+img2text = { version = "0.1.1", default-features = false }
+console = { version = "0.15.0", optional = true }
+ndarray = { version = "0.15" }
+anyhow = { version = "1.0.34", optional = true }
+clap = { version = "3.2", features = ["wrap_help", "derive"], optional = true }
+srgb = { version = "0.3.1" }
+log = { version = "0.4.11", optional = true }
+rgb = { version = "0.8" }
+
+[dependencies.image]
+version = "0.24"
+default-features = false
+optional = true
+features = ["jpeg", "webp", "bmp", "gif", "png", "tga"]
+
+[dev-dependencies]
+quickcheck_macros = "1"
+quickcheck = "1"
