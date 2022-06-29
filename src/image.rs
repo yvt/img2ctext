@@ -39,6 +39,30 @@ impl QuantizedImage {
     }
 
     /// Convert this image to a colored preformatted text using the glyph set
+    /// [`img2text::GLYPH_SET_1X2`].
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if `self.cell_dim() != [1, 2]`.
+    pub fn write_1x2_to<W: WriteCell + ?Sized>(&self, out: &mut W) -> Result<(), W::Error> {
+        let mut opts = img2text::Bmp2textOpts::default();
+        opts.glyph_set = img2text::GLYPH_SET_1X2;
+        self.write_to(&opts, [2, 1], out)
+    }
+
+    /// Convert this image to a colored preformatted text using the glyph set
+    /// [`img2text::GLYPH_SET_2X2`].
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if `self.cell_dim() != [2, 2]`.
+    pub fn write_2x2_to<W: WriteCell + ?Sized>(&self, out: &mut W) -> Result<(), W::Error> {
+        let mut opts = img2text::Bmp2textOpts::default();
+        opts.glyph_set = img2text::GLYPH_SET_2X2;
+        self.write_to(&opts, [2, 2], out)
+    }
+
+    /// Convert this image to a colored preformatted text using the glyph set
     /// [`img2text::GLYPH_SET_2X3`].
     ///
     /// # Panics
@@ -48,6 +72,18 @@ impl QuantizedImage {
         let mut opts = img2text::Bmp2textOpts::default();
         opts.glyph_set = img2text::GLYPH_SET_2X3;
         self.write_to(&opts, [3, 2], out)
+    }
+
+    /// Convert this image to a colored preformatted text using the glyph set
+    /// [`img2text::GLYPH_SET_SLC`].
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if `self.cell_dim() != [3, 3]`.
+    pub fn write_slc_to<W: WriteCell + ?Sized>(&self, out: &mut W) -> Result<(), W::Error> {
+        let mut opts = img2text::Bmp2textOpts::default();
+        opts.glyph_set = img2text::GLYPH_SET_SLC;
+        self.write_to(&opts, [3, 3], out)
     }
 
     /// Convert this image to a colored preformatted text using an `img2text`

@@ -47,7 +47,10 @@ struct Opts {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum Style {
+    _1x2,
+    _2x2,
     _2x3,
+    Slc,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -146,7 +149,10 @@ fn main() -> Result<()> {
     let mut qopts = img2ctext::DEFAULT_QUANTIZE_OPTS;
 
     qopts.cell_dim = match opts.style {
+        Style::_1x2 => [2, 1],
+        Style::_2x2 => [2, 2],
         Style::_2x3 => [3, 2],
+        Style::Slc => [3, 3],
     };
     qopts.dither_strength = opts.dither;
 
@@ -268,7 +274,10 @@ fn main() -> Result<()> {
         };
 
         match opts.style {
+            Style::_1x2 => qimg.write_1x2_to(&mut writer),
+            Style::_2x2 => qimg.write_2x2_to(&mut writer),
             Style::_2x3 => qimg.write_2x3_to(&mut writer),
+            Style::Slc => qimg.write_slc_to(&mut writer),
         }
     });
 
