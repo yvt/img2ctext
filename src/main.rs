@@ -58,6 +58,7 @@ enum Style {
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum OutputFormat {
     Ansi24,
+    Webp,
     WebpDebug,
 }
 
@@ -296,6 +297,19 @@ fn main() -> Result<()> {
         OutputFormat::Ansi24 => write_by_write_cell(&mut write_target, &|f: &mut _| {
             Box::new(img2ctext::AnsiTrueColorCellWriter::new(f))
         }),
+        OutputFormat::Webp => {
+            anyhow::ensure!(
+                !write_target_is_tty,
+                "Refusing to output binary data to a terminal"
+            );
+            let img = flatten_quantized_image(&qimg);
+            let img_dim = img.dim();
+            let img = img.as_standard_layout();
+            let img_bytes = zerocopy::AsBytes::as_bytes(img.as_slice().unwrap());
+            let encoder = webp::Encoder::from_rgba(img_bytes, img_dim.1 as u32, img_dim.0 as u32);
+            let img_webp = encoder.encode_lossless();
+            write_target.write_all(&img_webp)
+        }
         OutputFormat::WebpDebug => {
             anyhow::ensure!(
                 !write_target_is_tty,
@@ -362,6 +376,35 @@ fn adjust_image_size_for_output_size(
         output_dims[0].checked_mul(cell_dims[0])?.try_into().ok()?,
         output_dims[1].checked_mul(cell_dims[1])?.try_into().ok()?,
     ])
+}
+
+fn flatten_quantized_image(qimage: &img2ctext::QuantizedImage) -> Array2<[u8; 4]> {
+    let image_dim = qimage.image_dim();
+    let cell_dim = qimage.cell_dim();
+    let mut out = Array2::from_shape_simple_fn(
+        (image_dim[0] * cell_dim[0], image_dim[1] * cell_dim[1]),
+        || [0; 4],
+    );
+    Zip::from(out.exact_chunks_mut((cell_dim[0], cell_dim[1])))
+        .and(
+            qimage
+                .palettes
+                .view()
+                .into_shape((PALETTE_LEN * NUM_CHANNELS, image_dim[0], image_dim[1]))
+                .unwrap()
+                .lanes(Axis(0)),
+        )
+        .and(qimage.indices.exact_chunks((cell_dim[0], cell_dim[1])))
+        .for_each(|out, palette, indices| {
+            let mut palette_iter = palette.iter();
+            let palette = [(); PALETTE_LEN]
+                .map(|()| [(); NUM_CHANNELS].map(|()| *palette_iter.next().unwrap()));
+            Zip::from(out).and(indices).for_each(|out, &index| {
+                let [r, g, b] = palette[index as usize];
+                *out = [r, g, b, 255];
+            });
+        });
+    out
 }
 
 fn debug_quantized_image(qimage: &img2ctext::QuantizedImage) -> Array2<[u8; 4]> {
