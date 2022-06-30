@@ -264,7 +264,9 @@ fn main() -> Result<()> {
     // Quantize the image
     log::debug!("qopts = {qopts:?}");
     log::debug!("img_linear.dim = {:?}", img_linear.view().dim());
-    let qimg = img2ctext::quantize(img_linear.view(), &qopts).unwrap(); // TODO: report errors
+    let qimg = img2ctext::quantize(img_linear.view(), &qopts).with_context(|| {
+        format!("Failed to quantize the image of size ({img_width}, {img_height})")
+    })?;
 
     log::debug!("qimg.palettes.dim = {:?}", qimg.palettes.dim());
     log::debug!("qimg.indices.dim = {:?}", qimg.indices.dim());

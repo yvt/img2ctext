@@ -34,23 +34,27 @@ impl<'a> Default for QuantizeOpts<'a> {
 }
 
 /// The error type for [`quantize`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum QuantizeError {
     /// One or both sides of the input image are smaller than `cell_dim`.
     ///
     /// `quantize` refuses to produce an empty [`QuantizedImage`], which would
     /// violate its invariant `[ref:qimage_non_empty]`.
+    #[error("image too small")]
     ImageTooSmall,
     /// The number of input channels (`image.dim().0`) is not equal to
     /// [`NUM_CHANNELS`].
+    #[error("unsupported channel count")]
     IncorrectChannelCount,
     /// `cell_dim` contains a zero element.
+    #[error("invalid cell size")]
     EmptyCell,
     /// `cell_dim` exceeds an internal limit.
     ///
     /// `[tag:quantize_cell_limit]` The current limit is `cell_dim[0] *
     /// cell_dim[1] <= 32`.
+    #[error("cell dimensions are too large")]
     TooLargeCell,
 }
 
