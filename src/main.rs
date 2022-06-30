@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueHint};
 use img2ctext::{NUM_CHANNELS, PALETTE_LEN};
 use ndarray::{s, Array2, Axis, Zip};
-use std::{convert::TryInto, fmt, io::prelude::*, path::PathBuf, str::FromStr};
+use std::{cell::Cell, convert::TryInto, fmt, io::prelude::*, path::PathBuf, str::FromStr};
 
 #[derive(Parser, Debug)]
 #[clap(long_about = r"
@@ -271,9 +271,14 @@ fn main() -> Result<()> {
     log::debug!("qimg.cell_dim = {:?}", qimg.cell_dim());
     log::debug!("qimg.image_dim = {:?}", qimg.image_dim());
 
-    // Helpers for output generation
-    let write_by_write_cell = |write: &mut dyn std::io::Write,
-                               make_writer: &dyn for<'a, 'b> Fn(
+    // Output the image
+    let write_target = Cell::new(Some(std::io::stdout()));
+    let write_target = || write_target.take().unwrap();
+    let write_target_is_tty = console_stdout.is_term();
+
+    let write_error_context = || "Failed to write the output to the standard output";
+
+    let write_by_write_cell = |make_writer: &dyn for<'a, 'b> Fn(
         &'a mut fmt::Formatter<'b>,
     ) -> Box<
         dyn img2ctext::WriteCell<Error = fmt::Error> + 'a,
@@ -287,44 +292,34 @@ fn main() -> Result<()> {
                 Style::Slc => qimg.write_slc_to(&mut *writer),
             }
         });
-        write.write_fmt(format_args!("{}", display))
+        write_target()
+            .write_fmt(format_args!("{}", display))
+            .with_context(write_error_context)
     };
 
-    // Output the image
-    let mut write_target = std::io::stdout();
-    let write_target_is_tty = console_stdout.is_term();
+    let write_image = |img_source: &dyn Fn() -> Array2<[u8; 4]>| {
+        anyhow::ensure!(
+            !write_target_is_tty,
+            "Refusing to output binary data to a terminal"
+        );
+        let img = img_source();
+        let img_dim = img.dim();
+        let img = img.as_standard_layout();
+        let img_bytes = zerocopy::AsBytes::as_bytes(img.as_slice().unwrap());
+        let encoder = webp::Encoder::from_rgba(img_bytes, img_dim.1 as u32, img_dim.0 as u32);
+        let img_webp = encoder.encode_lossless();
+        write_target()
+            .write_all(&img_webp)
+            .with_context(write_error_context)
+    };
+
     match opts.output_format {
-        OutputFormat::Ansi24 => write_by_write_cell(&mut write_target, &|f: &mut _| {
-            Box::new(img2ctext::AnsiTrueColorCellWriter::new(f))
-        }),
-        OutputFormat::Webp => {
-            anyhow::ensure!(
-                !write_target_is_tty,
-                "Refusing to output binary data to a terminal"
-            );
-            let img = flatten_quantized_image(&qimg);
-            let img_dim = img.dim();
-            let img = img.as_standard_layout();
-            let img_bytes = zerocopy::AsBytes::as_bytes(img.as_slice().unwrap());
-            let encoder = webp::Encoder::from_rgba(img_bytes, img_dim.1 as u32, img_dim.0 as u32);
-            let img_webp = encoder.encode_lossless();
-            write_target.write_all(&img_webp)
+        OutputFormat::Ansi24 => {
+            write_by_write_cell(&|f: &mut _| Box::new(img2ctext::AnsiTrueColorCellWriter::new(f)))?
         }
-        OutputFormat::WebpDebug => {
-            anyhow::ensure!(
-                !write_target_is_tty,
-                "Refusing to output binary data to a terminal"
-            );
-            let img = debug_quantized_image(&qimg);
-            let img_dim = img.dim();
-            let img = img.as_standard_layout();
-            let img_bytes = zerocopy::AsBytes::as_bytes(img.as_slice().unwrap());
-            let encoder = webp::Encoder::from_rgba(img_bytes, img_dim.1 as u32, img_dim.0 as u32);
-            let img_webp = encoder.encode_lossless();
-            write_target.write_all(&img_webp)
-        }
+        OutputFormat::Webp => write_image(&|| flatten_quantized_image(&qimg))?,
+        OutputFormat::WebpDebug => write_image(&|| debug_quantized_image(&qimg))?,
     }
-    .context("Failed to write the output to the standard output")?;
 
     Ok(())
 }
