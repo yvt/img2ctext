@@ -1,6 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueHint};
-use std::{convert::TryInto, io::prelude::*, path::PathBuf, str::FromStr};
+use img2ctext::{NUM_CHANNELS, PALETTE_LEN};
+use ndarray::{s, Array2, Axis, Zip};
+use std::{convert::TryInto, fmt, io::prelude::*, path::PathBuf, str::FromStr};
 
 #[derive(Parser, Debug)]
 #[clap(long_about = r"
@@ -56,6 +58,7 @@ enum Style {
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum OutputFormat {
     Ansi24,
+    WebpDebug,
 }
 
 #[derive(Debug)]
@@ -267,23 +270,47 @@ fn main() -> Result<()> {
     log::debug!("qimg.cell_dim = {:?}", qimg.cell_dim());
     log::debug!("qimg.image_dim = {:?}", qimg.image_dim());
 
+    // Helpers for output generation
+    let write_by_write_cell = |write: &mut dyn std::io::Write,
+                               make_writer: &dyn for<'a, 'b> Fn(
+        &'a mut fmt::Formatter<'b>,
+    ) -> Box<
+        dyn img2ctext::WriteCell<Error = fmt::Error> + 'a,
+    >| {
+        let display = fn_formats::DisplayFmt(|f: &mut fmt::Formatter<'_>| {
+            let mut writer = make_writer(f);
+            match opts.style {
+                Style::_1x2 => qimg.write_1x2_to(&mut *writer),
+                Style::_2x2 => qimg.write_2x2_to(&mut *writer),
+                Style::_2x3 => qimg.write_2x3_to(&mut *writer),
+                Style::Slc => qimg.write_slc_to(&mut *writer),
+            }
+        });
+        write.write_fmt(format_args!("{}", display))
+    };
+
     // Output the image
-    let output = fn_formats::DisplayFmt(|f: &mut _| {
-        let mut writer = match opts.output_format {
-            OutputFormat::Ansi24 => img2ctext::AnsiTrueColorCellWriter::new(f),
-        };
-
-        match opts.style {
-            Style::_1x2 => qimg.write_1x2_to(&mut writer),
-            Style::_2x2 => qimg.write_2x2_to(&mut writer),
-            Style::_2x3 => qimg.write_2x3_to(&mut writer),
-            Style::Slc => qimg.write_slc_to(&mut writer),
+    let mut write_target = std::io::stdout();
+    let write_target_is_tty = console_stdout.is_term();
+    match opts.output_format {
+        OutputFormat::Ansi24 => write_by_write_cell(&mut write_target, &|f: &mut _| {
+            Box::new(img2ctext::AnsiTrueColorCellWriter::new(f))
+        }),
+        OutputFormat::WebpDebug => {
+            anyhow::ensure!(
+                !write_target_is_tty,
+                "Refusing to output binary data to a terminal"
+            );
+            let img = debug_quantized_image(&qimg);
+            let img_dim = img.dim();
+            let img = img.as_standard_layout();
+            let img_bytes = zerocopy::AsBytes::as_bytes(img.as_slice().unwrap());
+            let encoder = webp::Encoder::from_rgba(img_bytes, img_dim.1 as u32, img_dim.0 as u32);
+            let img_webp = encoder.encode_lossless();
+            write_target.write_all(&img_webp)
         }
-    });
-
-    std::io::stdout()
-        .write_fmt(format_args!("{output}"))
-        .context("Failed to write the output to the standard output")?;
+    }
+    .context("Failed to write the output to the standard output")?;
 
     Ok(())
 }
@@ -335,4 +362,69 @@ fn adjust_image_size_for_output_size(
         output_dims[0].checked_mul(cell_dims[0])?.try_into().ok()?,
         output_dims[1].checked_mul(cell_dims[1])?.try_into().ok()?,
     ])
+}
+
+fn debug_quantized_image(qimage: &img2ctext::QuantizedImage) -> Array2<[u8; 4]> {
+    let image_dim = qimage.image_dim();
+    let cell_dim = qimage.cell_dim();
+
+    let margin = 2;
+    let cell_margin = 1;
+    let pixel_size = 4;
+
+    let mut out = Array2::from_shape_simple_fn(
+        (
+            (margin * 2) + image_dim[0] * (cell_margin + cell_dim[0] * pixel_size),
+            (margin * 2) + image_dim[1] * (cell_margin + cell_dim[1] * pixel_size),
+        ),
+        || [200, 200, 200, 255],
+    );
+
+    // Ignore the margin
+    let mut out_main = out.slice_mut(s!(
+        margin..out.dim().0 - margin,
+        margin..out.dim().1 - margin,
+    ));
+
+    // For each cell...
+    Zip::from(out_main.exact_chunks_mut((
+        cell_margin + cell_dim[0] * pixel_size,
+        cell_margin + cell_dim[1] * pixel_size,
+    )))
+    .and(
+        qimage
+            .palettes
+            .view()
+            .into_shape((PALETTE_LEN * NUM_CHANNELS, image_dim[0], image_dim[1]))
+            .unwrap()
+            .lanes(Axis(0)),
+    )
+    .and(qimage.indices.exact_chunks((cell_dim[0], cell_dim[1])))
+    .for_each(|mut out_cell, palette, indices| {
+        let mut palette_iter = palette.iter();
+        let palette =
+            [(); PALETTE_LEN].map(|()| [(); NUM_CHANNELS].map(|()| *palette_iter.next().unwrap()));
+
+        out_cell
+            .slice_mut(s!(
+                1..out_cell.dim().0 - cell_margin,
+                1..out_cell.dim().1 - cell_margin
+            ))
+            .fill([palette[0][0], palette[0][1], palette[0][2], 255]);
+
+        Zip::from(out_cell.exact_chunks_mut((pixel_size, pixel_size)))
+            .and(indices)
+            .for_each(|mut out_pixel, &index| {
+                if index {
+                    out_pixel
+                        .slice_mut(s!(1..pixel_size, 1..pixel_size))
+                        .fill([0, 0, 0, 255]);
+                    out_pixel
+                        .slice_mut(s!(..pixel_size - 1, ..pixel_size - 1))
+                        .fill([palette[1][0], palette[1][1], palette[1][2], 255]);
+                }
+            });
+    });
+
+    out
 }
